@@ -1,6 +1,6 @@
 import React from 'react';
 
-const OutputPanel = ({ output, status, executionTime, isRunning }) => {
+const OutputPanel = ({ output, stderr, status, executionTime, isRunning }) => {
   const getStatusIcon = () => {
     switch (status) {
       case 'success': return '✓';
@@ -50,8 +50,16 @@ const OutputPanel = ({ output, status, executionTime, isRunning }) => {
       </div>
       
       <div className="output-content">
-        {output ? (
-          <pre className="output-text">{output}</pre>
+        {output || stderr ? (
+          <>
+            {output && <pre className="output-text">{output}</pre>}
+            {stderr && (
+              <div className="output-error-wrapper">
+                <div className="output-error-header">Standard Error (stderr):</div>
+                <pre className="output-error-text">{stderr}</pre>
+              </div>
+            )}
+          </>
         ) : (
           <div className="output-placeholder">
             <div className="placeholder-icon">▸</div>

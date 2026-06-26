@@ -30,10 +30,10 @@ func (r *Registry) loadDefaultLanguages() {
 		MemLimit: "128m",
 	}
 
-	// C++ — pin to gcc:12 for a stable, available tag
+	// C++ — pin to gcc:12-alpine for a stable, smaller alpine-based image
 	r.languages["cpp"] = models.Language{
 		Name:     "cpp",
-		Image:    "gcc:12",
+		Image:    "gcc:12-alpine",
 		Compile:  []string{"g++", "-o", "/tmp/code", "/tmp/code.cpp"},
 		Run:      []string{"/tmp/code"},
 		Timeout:  30,
@@ -49,10 +49,10 @@ func (r *Registry) loadDefaultLanguages() {
 		MemLimit: "128m",
 	}
 
-	// Java
+	// Java — pin to eclipse-temurin:17-alpine (correct alpine tag)
 	r.languages["java"] = models.Language{
 		Name:     "java",
-		Image:    "eclipse-temurin:17-jdk-alpine",
+		Image:    "eclipse-temurin:17-alpine",
 		Compile:  []string{"javac", "/tmp/Main.java"},
 		Run:      []string{"java", "-cp", "/tmp", "Main"},
 		Timeout:  30,

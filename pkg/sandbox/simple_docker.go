@@ -9,6 +9,8 @@ import (
 	"time"
 
 	"code-execution-engine/internal/models"
+
+	"github.com/google/uuid"
 )
 
 // SimpleSandbox provides secure code execution using Docker CLI
@@ -92,13 +94,13 @@ func (s *SimpleSandbox) ExecuteCode(req *models.ExecutionRequest, lang models.La
 
 	if isMultiFile {
 		// Multi-file execution
-		output, stderr, exitCode, err = s.executeMultiFile(req.Files, mainFile, lang, dockerArgs)
+		output, stderr, exitCode, err = s.executeMultiFile(req.Files, mainFile, lang, dockerArgs, req.Stdin)
 	} else if len(lang.Compile) > 0 {
 		// Single file with compilation (C++, Java)
-		output, stderr, exitCode, err = s.executeWithCompilation(code, lang, dockerArgs, mainFile)
+		output, stderr, exitCode, err = s.executeWithCompilation(code, lang, dockerArgs, mainFile, req.Stdin)
 	} else {
 		// Single file interpreted (Python, JavaScript)
-		output, stderr, exitCode, err = s.executeDirectly(code, lang, dockerArgs, mainFile)
+		output, stderr, exitCode, err = s.executeDirectly(code, lang, dockerArgs, mainFile, req.Stdin)
 	}
 
 	result.ExecutionTime = time.Since(start)
@@ -126,22 +128,25 @@ func (s *SimpleSandbox) ExecuteCode(req *models.ExecutionRequest, lang models.La
 }
 
 // executeDirectly runs interpreted languages
-func (s *SimpleSandbox) executeDirectly(code string, lang models.Language, dockerArgs []string, filename string) (string, string, int, error) {
-	// Use echo with proper escaping for interpreted languages
-	script := fmt.Sprintf("cat > /tmp/%s << 'EOF'\n%s\nEOF\n%s",
+func (s *SimpleSandbox) executeDirectly(code string, lang models.Language, dockerArgs []string, filename string, stdin string) (string, string, int, error) {
+	eofDelimiter := "EOF_" + strings.ReplaceAll(uuid.New().String(), "-", "")
+	script := fmt.Sprintf("cat > /tmp/%s << '%s'\n%s\n%s\n%s",
 		filename,
+		eofDelimiter,
 		code,
+		eofDelimiter,
 		strings.Join(lang.Run, " "))
 
 	args := append(dockerArgs, "sh", "-c", script)
 
-	return s.runDockerCommand(args, time.Duration(lang.Timeout)*time.Second)
+	return s.runDockerCommand(args, stdin, time.Duration(lang.Timeout)*time.Second)
 }
 
 // executeMultiFile runs multi-file projects
-func (s *SimpleSandbox) executeMultiFile(files []models.ProjectFile, mainFile string, lang models.Language, dockerArgs []string) (string, string, int, error) {
+func (s *SimpleSandbox) executeMultiFile(files []models.ProjectFile, mainFile string, lang models.Language, dockerArgs []string, stdin string) (string, string, int, error) {
 	// Build script to create all files
 	var scriptParts []string
+	eofDelimiter := "EOF_" + strings.ReplaceAll(uuid.New().String(), "-", "")
 
 	// Create base directory first
 	scriptParts = append(scriptParts, "mkdir -p /tmp/code")
@@ -155,7 +160,7 @@ func (s *SimpleSandbox) executeMultiFile(files []models.ProjectFile, mainFile st
 		}
 
 		// Write file content
-		scriptParts = append(scriptParts, fmt.Sprintf("cat > /tmp/code/%s << 'EOF'\n%s\nEOF", file.Path, file.Content))
+		scriptParts = append(scriptParts, fmt.Sprintf("cat > /tmp/code/%s << '%s'\n%s\n%s", file.Path, eofDelimiter, file.Content, eofDelimiter))
 	}
 
 	// Add execution command — build from lang.Name so the right interpreter is
@@ -202,28 +207,31 @@ func (s *SimpleSandbox) executeMultiFile(files []models.ProjectFile, mainFile st
 	script := strings.Join(scriptParts, "\n")
 	args := append(dockerArgs, "sh", "-c", script)
 
-	return s.runDockerCommand(args, time.Duration(lang.Timeout)*time.Second)
+	return s.runDockerCommand(args, stdin, time.Duration(lang.Timeout)*time.Second)
 }
 
 // executeWithCompilation runs compiled languages
-func (s *SimpleSandbox) executeWithCompilation(code string, lang models.Language, dockerArgs []string, filename string) (string, string, int, error) {
+func (s *SimpleSandbox) executeWithCompilation(code string, lang models.Language, dockerArgs []string, filename string, stdin string) (string, string, int, error) {
 	// Use heredoc to avoid escaping issues
 	compileCmd := strings.Join(lang.Compile, " ")
 	runCmd := strings.Join(lang.Run, " ")
+	eofDelimiter := "EOF_" + strings.ReplaceAll(uuid.New().String(), "-", "")
 
-	script := fmt.Sprintf("cat > /tmp/%s << 'EOF'\n%s\nEOF\n%s && %s",
+	script := fmt.Sprintf("cat > /tmp/%s << '%s'\n%s\n%s\n%s && %s",
 		filename,
+		eofDelimiter,
 		code,
+		eofDelimiter,
 		compileCmd,
 		runCmd)
 
 	args := append(dockerArgs, "sh", "-c", script)
 
-	return s.runDockerCommand(args, time.Duration(lang.Timeout)*time.Second)
+	return s.runDockerCommand(args, stdin, time.Duration(lang.Timeout)*time.Second)
 }
 
 // runDockerCommand executes Docker command with timeout
-func (s *SimpleSandbox) runDockerCommand(args []string, timeout time.Duration) (string, string, int, error) {
+func (s *SimpleSandbox) runDockerCommand(args []string, stdin string, timeout time.Duration) (string, string, int, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 
@@ -232,6 +240,9 @@ func (s *SimpleSandbox) runDockerCommand(args []string, timeout time.Duration) (
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
+	if stdin != "" {
+		cmd.Stdin = strings.NewReader(stdin)
+	}
 
 	err := cmd.Run()
 

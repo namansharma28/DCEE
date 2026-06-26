@@ -12,6 +12,7 @@ type ExecutionRequest struct {
 	UserID   string        `json:"user_id,omitempty" bson:"user_id,omitempty"`
 	Files    []ProjectFile `json:"files,omitempty" bson:"files,omitempty"`
 	MainFile string        `json:"main_file,omitempty" bson:"main_file,omitempty"`
+	Stdin    string        `json:"stdin,omitempty" bson:"stdin,omitempty"`
 	Status   string        `json:"status" bson:"status"` // pending, running, completed, failed
 	Created  time.Time     `json:"created" bson:"created"`
 }

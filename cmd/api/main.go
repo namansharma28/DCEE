@@ -197,6 +197,7 @@ func (s *APIServer) executeCode(c *gin.Context) {
 			UpdatedAt string `json:"updated_at"`
 		} `json:"files,omitempty"`
 		MainFile string `json:"main_file,omitempty"`
+		Stdin    string `json:"stdin,omitempty"`
 	}
 
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -259,6 +260,7 @@ func (s *APIServer) executeCode(c *gin.Context) {
 		UserID:   req.UserID,
 		Files:    projectFiles,
 		MainFile: req.MainFile,
+		Stdin:    req.Stdin,
 		Status:   "pending",
 		Created:  time.Now(),
 	}

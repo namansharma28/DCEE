@@ -5,7 +5,7 @@ import Header from './Header';
 import CodeEditor from './CodeEditor';
 import OutputPanel from './OutputPanel';
 import LoadingSpinner from './LoadingSpinner';
-import { executeCode, getResult } from '../services/api';
+import { getResult } from '../services/api';
 import { 
   ArrowLeft, 
   Save, 
@@ -40,6 +40,12 @@ const ProjectEditor = () => {
   const [contextMenu, setContextMenu] = useState(null);
   const [expandedFolders, setExpandedFolders] = useState(new Set());
   
+  // Custom states added for Stdin, Stderr, and reactive Unsaved Indicators
+  const [stdin, setStdin] = useState('');
+  const [showStdin, setShowStdin] = useState(false);
+  const [stderr, setStderr] = useState('');
+  const [unsavedChanges, setUnsavedChanges] = useState({});
+  
   // Load unsaved changes from localStorage on mount
   const getUnsavedChanges = () => {
     try {
@@ -55,6 +61,7 @@ const ProjectEditor = () => {
       const unsaved = getUnsavedChanges();
       unsaved[fileId] = content;
       localStorage.setItem(`project_${projectId}_unsaved`, JSON.stringify(unsaved));
+      setUnsavedChanges(unsaved);
     } catch (e) {
       console.error('Failed to save to localStorage:', e);
     }
@@ -65,6 +72,7 @@ const ProjectEditor = () => {
       const unsaved = getUnsavedChanges();
       delete unsaved[fileId];
       localStorage.setItem(`project_${projectId}_unsaved`, JSON.stringify(unsaved));
+      setUnsavedChanges(unsaved);
     } catch (e) {
       console.error('Failed to clear localStorage:', e);
     }
@@ -76,6 +84,32 @@ const ProjectEditor = () => {
     document.addEventListener('click', handleClick);
     return () => document.removeEventListener('click', handleClick);
   }, []);
+
+  useEffect(() => {
+    setUnsavedChanges(getUnsavedChanges());
+    setStdin('');
+    setShowStdin(false);
+    setStderr('');
+  }, [projectId]);
+
+  useEffect(() => {
+    const handleKeyDown = (e) => {
+      if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
+        e.preventDefault();
+        if (!isRunning && code.trim()) {
+          handleRunCode();
+        }
+      }
+      if ((e.ctrlKey || e.metaKey) && e.key === 's') {
+        e.preventDefault();
+        if (selectedFile) {
+          handleSaveFile();
+        }
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [isRunning, code, stdin, selectedFile, project]);
 
   useEffect(() => {
     // Don't redirect if still loading auth status
@@ -108,6 +142,12 @@ const ProjectEditor = () => {
   // Auto-save code changes to localStorage
   useEffect(() => {
     if (selectedFile && code !== undefined) {
+      if (code === selectedFile.content) {
+        // Content matches original, clear any unsaved status
+        clearUnsavedChanges(selectedFile.id);
+        return;
+      }
+      
       const timeoutId = setTimeout(() => {
         saveUnsavedChanges(selectedFile.id, code);
       }, 500); // Debounce for 500ms
@@ -151,6 +191,7 @@ const ProjectEditor = () => {
 
     setIsRunning(true);
     setOutput('Executing code...');
+    setStderr('');
     setStatus('running');
     setExecutionTime(null);
 
@@ -175,7 +216,8 @@ const ProjectEditor = () => {
       const executionRequest = {
         language: selectedFile ? getFileLanguage(selectedFile.name) : project.language,
         files: allFiles,
-        main_file: selectedFile?.path || project.files[0]?.path
+        main_file: selectedFile?.path || project.files[0]?.path,
+        stdin: stdin
       };
 
       console.log('Execution request:', executionRequest);
@@ -200,26 +242,37 @@ const ProjectEditor = () => {
 
       let attempts = 0;
       const maxAttempts = 30;
+      let completed = false;
 
+      // HTTP Polling Fallback
       const pollResult = async () => {
+        if (completed) return;
         try {
           const result = await getResult(jobId);
           
           if (result.status === 'success') {
+            completed = true;
             setOutput(result.output || 'Code executed successfully (no output)');
+            setStderr(result.error || '');
             setStatus('success');
             setExecutionTime((result.execution_time / 1e9).toFixed(2));
+            setIsRunning(false);
           } else if (result.status === 'error') {
-            setOutput(result.error || 'Unknown error occurred');
+            completed = true;
+            setOutput(result.output || '');
+            setStderr(result.error || 'Unknown error occurred');
             setStatus('error');
             setExecutionTime(result.execution_time ? (result.execution_time / 1e9).toFixed(2) : null);
+            setIsRunning(false);
           } else {
             attempts++;
             if (attempts < maxAttempts) {
               setTimeout(pollResult, 1000);
             } else {
+              completed = true;
               setOutput('Execution timeout - code took too long to run');
               setStatus('error');
+              setIsRunning(false);
             }
             return;
           }
@@ -229,22 +282,74 @@ const ProjectEditor = () => {
             if (attempts < maxAttempts) {
               setTimeout(pollResult, 1000);
             } else {
+              completed = true;
               setOutput('Execution timeout - please try again');
               setStatus('error');
+              setIsRunning(false);
             }
           } else {
+            completed = true;
             setOutput(`Error: ${error.message}`);
             setStatus('error');
+            setIsRunning(false);
           }
         }
       };
 
-      setTimeout(pollResult, 500);
+      // Try WebSocket connection first
+      const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+      const wsUrl = `${protocol}//${window.location.host}/ws/${jobId}`;
+      const ws = new WebSocket(wsUrl);
+
+      ws.onopen = () => {
+        console.log('WebSocket connected for execution job:', jobId);
+      };
+
+      ws.onmessage = (event) => {
+        try {
+          const wsData = JSON.parse(event.data);
+          if (wsData.type === 'status') {
+            setOutput(wsData.content || 'Executing...');
+          } else if (wsData.type === 'complete') {
+            completed = true;
+            const result = wsData.content;
+            if (result.status === 'success') {
+              setOutput(result.output || 'Code executed successfully (no output)');
+              setStderr(result.error || '');
+              setStatus('success');
+              setExecutionTime((result.execution_time / 1e9).toFixed(2));
+            } else {
+              setOutput(result.output || '');
+              setStderr(result.error || 'Unknown error occurred');
+              setStatus('error');
+              setExecutionTime(result.execution_time ? (result.execution_time / 1e9).toFixed(2) : null);
+            }
+            setIsRunning(false);
+            ws.close();
+          }
+        } catch (e) {
+          console.error('Error parsing WS message:', e);
+        }
+      };
+
+      ws.onerror = (error) => {
+        console.error('WebSocket error, falling back to polling:', error);
+        if (!completed) {
+          pollResult();
+        }
+      };
+
+      ws.onclose = () => {
+        console.log('WebSocket closed');
+        // If WebSocket closed without completing, fallback to polling
+        if (!completed) {
+          pollResult();
+        }
+      };
 
     } catch (error) {
       setOutput(`Error: ${error.message}`);
       setStatus('error');
-    } finally {
       setIsRunning(false);
     }
   };
@@ -472,6 +577,42 @@ const ProjectEditor = () => {
   const handleCreateFolderInFolder = () => {
     setSelectedFolder(contextMenu.item);
     setShowNewFolderModal(true);
+    setContextMenu(null);
+  };
+
+  const handleSetMainFile = async () => {
+    if (!contextMenu || contextMenu.type !== 'file') return;
+    const file = contextMenu.item;
+
+    try {
+      const response = await fetch(`/api/project/${projectId}`, {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+          ...getAuthHeaders()
+        },
+        body: JSON.stringify({
+          name: project.name,
+          description: project.description,
+          is_public: project.is_public,
+          tags: project.tags,
+          files: project.files,
+          main_file: file.path
+        })
+      });
+
+      const data = await response.json();
+      
+      if (data.success) {
+        setProject(prev => ({ ...prev, main_file: file.path }));
+      } else {
+        console.error('Failed to set main file:', data.error);
+        alert('Failed to set main file: ' + data.error);
+      }
+    } catch (error) {
+      console.error('Failed to set main file:', error);
+      alert('Failed to set main file');
+    }
     setContextMenu(null);
   };
 
@@ -782,8 +923,11 @@ const ProjectEditor = () => {
             onContextMenu={(e) => handleContextMenu(e, item, 'file')}
           >
             <span className="file-icon">{getFileIcon(item.name)}</span>
-            <span className="file-name">{item.name}</span>
-            {item.id === project.main_file && (
+            <span className="file-name">
+              {item.name}
+              {unsavedChanges[item.id] !== undefined && <span className="unsaved-indicator">●</span>}
+            </span>
+            {(item.path === project.main_file || item.id === project.main_file) && (
               <span className="main-badge">main</span>
             )}
           </div>
@@ -920,23 +1064,47 @@ const ProjectEditor = () => {
                   <div className="editor-header">
                     <div className="file-tab">
                       <span className="file-icon">{getFileIcon(selectedFile.name)}</span>
-                      <span className="file-name">{selectedFile.name}</span>
+                      <span className="file-name">
+                        {selectedFile.name}
+                        {unsavedChanges[selectedFile.id] !== undefined && <span className="unsaved-indicator">●</span>}
+                      </span>
                     </div>
                   </div>
                   
                   <div className="editor-workspace">
                     <div className="code-panel">
                       <CodeEditor 
-                        language={selectedFile.language}
+                        language={getFileLanguage(selectedFile.name)}
                         code={code}
                         onChange={setCode}
                         onShare={(shareData) => console.log('Shared:', shareData)}
                       />
+                      
+                      <div className={`stdin-section ${showStdin ? 'open' : ''}`}>
+                        <div className="stdin-header" onClick={() => setShowStdin(!showStdin)}>
+                          <div className="stdin-title">
+                            Standard Input (stdin)
+                            {stdin.trim() && <span className="stdin-badge">active</span>}
+                          </div>
+                          <span className="stdin-toggle">{showStdin ? 'Hide Input' : 'Show Input'}</span>
+                        </div>
+                        {showStdin && (
+                          <div className="stdin-body">
+                            <textarea
+                              className="stdin-textarea"
+                              placeholder="Provide input for your program here (e.g. text inputs separated by newlines)..."
+                              value={stdin}
+                              onChange={(e) => setStdin(e.target.value)}
+                            />
+                          </div>
+                        )}
+                      </div>
                     </div>
                     
                     <div className="output-panel">
                       <OutputPanel 
                         output={output}
+                        stderr={stderr}
                         status={status}
                         executionTime={executionTime}
                         isRunning={isRunning}
@@ -1092,6 +1260,15 @@ const ProjectEditor = () => {
               <div className="context-menu-item" onClick={handleCreateFolderInFolder}>
                 <FolderPlus size={14} />
                 <span>New Folder</span>
+              </div>
+              <div className="context-menu-divider"></div>
+            </>
+          )}
+          {contextMenu.type === 'file' && (
+            <>
+              <div className="context-menu-item" onClick={handleSetMainFile}>
+                <Play size={14} />
+                <span>Set as Main File</span>
               </div>
               <div className="context-menu-divider"></div>
             </>

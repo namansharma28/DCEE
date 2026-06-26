@@ -109,6 +109,9 @@ func (s *LocalSandbox) ExecuteCode(req *models.ExecutionRequest, lang models.Lan
 	runCmd.Dir = tmpDir
 	runCmd.Stdout = &stdout
 	runCmd.Stderr = &stderr
+	if req.Stdin != "" {
+		runCmd.Stdin = strings.NewReader(req.Stdin)
+	}
 
 	doneCh := make(chan error, 1)
 	go func() { doneCh <- runCmd.Run() }()
