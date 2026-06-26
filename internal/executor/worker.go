@@ -56,7 +56,10 @@ func (w *Worker) processJob() {
 	// Pop job from queue with timeout
 	job, err := w.queue.Pop(5 * time.Second)
 	if err != nil {
-		log.Printf("Worker %d: Error popping job: %v", w.id, err)
+		// Only log non-timeout errors
+		if err.Error() != "redis: nil" {
+			log.Printf("Worker %d: Error popping job: %v", w.id, err)
+		}
 		return
 	}
 
@@ -65,11 +68,13 @@ func (w *Worker) processJob() {
 		return
 	}
 
-	log.Printf("Worker %d: Processing job %s", w.id, job.ID)
+	log.Printf("Worker %d: Processing job %s (Language: %s, Files: %d)",
+		w.id, job.ID, job.Language, len(job.Files))
 
 	// Get language configuration
 	lang, err := w.registry.GetLanguage(job.Language)
 	if err != nil {
+		log.Printf("Worker %d: Unsupported language %s for job %s", w.id, job.Language, job.ID)
 		w.publishError(job.ID, fmt.Sprintf("Unsupported language: %s", job.Language))
 		return
 	}
@@ -78,15 +83,19 @@ func (w *Worker) processJob() {
 	job.Status = "running"
 
 	// Execute code in sandbox
+	log.Printf("Worker %d: Executing job %s in sandbox", w.id, job.ID)
 	result, err := w.sandbox.ExecuteCode(job, lang)
 	if err != nil {
+		log.Printf("Worker %d: Execution failed for job %s: %v", w.id, job.ID, err)
 		w.publishError(job.ID, fmt.Sprintf("Execution failed: %v", err))
 		return
 	}
 
 	// Publish result
+	log.Printf("Worker %d: Publishing result for job %s (Status: %s)", w.id, job.ID, result.Status)
 	if err := w.queue.PublishResult(result); err != nil {
 		log.Printf("Worker %d: Error publishing result: %v", w.id, err)
+		return
 	}
 
 	log.Printf("Worker %d: Completed job %s in %v", w.id, job.ID, result.ExecutionTime)

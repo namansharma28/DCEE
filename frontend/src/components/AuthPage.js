@@ -3,7 +3,6 @@ import { useNavigate, useLocation } from 'react-router-dom';
 import { GoogleOAuthProvider, GoogleLogin } from '@react-oauth/google';
 import axios from 'axios';
 import Cookies from 'js-cookie';
-import './AuthPage.css';
 
 const AuthPage = () => {
   const navigate = useNavigate();

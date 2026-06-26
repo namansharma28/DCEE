@@ -36,8 +36,22 @@ func (s *SimpleSandbox) ExecuteCode(req *models.ExecutionRequest, lang models.La
 	// Create temporary container name
 	containerName := fmt.Sprintf("code-exec-%s", req.ID)
 
-	// Write code to temporary file
-	filename := s.getFilename(lang.Name)
+	// Determine if this is multi-file execution
+	isMultiFile := len(req.Files) > 0
+	var code string
+	var mainFile string
+
+	if isMultiFile {
+		// Multi-file project execution
+		mainFile = req.MainFile
+		if mainFile == "" && len(req.Files) > 0 {
+			mainFile = req.Files[0].Path
+		}
+	} else {
+		// Single file execution (backward compatible)
+		code = req.Code
+		mainFile = s.getFilename(lang.Name)
+	}
 
 	// Prepare Docker run command with different security for compiled vs interpreted languages
 	var dockerArgs []string
@@ -71,17 +85,20 @@ func (s *SimpleSandbox) ExecuteCode(req *models.ExecutionRequest, lang models.La
 		}
 	}
 
-	// Execute based on language
+	// Execute based on language and file structure
 	var output, stderr string
 	var exitCode int
 	var err error
 
-	if len(lang.Compile) > 0 {
-		// Languages that need compilation (C++, Java)
-		output, stderr, exitCode, err = s.executeWithCompilation(req.Code, lang, dockerArgs, filename)
+	if isMultiFile {
+		// Multi-file execution
+		output, stderr, exitCode, err = s.executeMultiFile(req.Files, mainFile, lang, dockerArgs)
+	} else if len(lang.Compile) > 0 {
+		// Single file with compilation (C++, Java)
+		output, stderr, exitCode, err = s.executeWithCompilation(code, lang, dockerArgs, mainFile)
 	} else {
-		// Interpreted languages (Python, JavaScript)
-		output, stderr, exitCode, err = s.executeDirectly(req.Code, lang, dockerArgs, filename)
+		// Single file interpreted (Python, JavaScript)
+		output, stderr, exitCode, err = s.executeDirectly(code, lang, dockerArgs, mainFile)
 	}
 
 	result.ExecutionTime = time.Since(start)
@@ -116,6 +133,73 @@ func (s *SimpleSandbox) executeDirectly(code string, lang models.Language, docke
 		code,
 		strings.Join(lang.Run, " "))
 
+	args := append(dockerArgs, "sh", "-c", script)
+
+	return s.runDockerCommand(args, time.Duration(lang.Timeout)*time.Second)
+}
+
+// executeMultiFile runs multi-file projects
+func (s *SimpleSandbox) executeMultiFile(files []models.ProjectFile, mainFile string, lang models.Language, dockerArgs []string) (string, string, int, error) {
+	// Build script to create all files
+	var scriptParts []string
+
+	// Create base directory first
+	scriptParts = append(scriptParts, "mkdir -p /tmp/code")
+
+	// Create all files with their folder structure
+	for _, file := range files {
+		// Create directory if file is in a folder
+		if strings.Contains(file.Path, "/") {
+			dir := file.Path[:strings.LastIndex(file.Path, "/")]
+			scriptParts = append(scriptParts, fmt.Sprintf("mkdir -p /tmp/code/%s", dir))
+		}
+
+		// Write file content
+		scriptParts = append(scriptParts, fmt.Sprintf("cat > /tmp/code/%s << 'EOF'\n%s\nEOF", file.Path, file.Content))
+	}
+
+	// Add execution command — build from lang.Name so the right interpreter is
+	// always used regardless of the actual filename.
+	absMain := fmt.Sprintf("/tmp/code/%s", mainFile)
+	if len(lang.Compile) > 0 {
+		// Compiled language — substitute the main file path into the compile command.
+		// Output binary to /tmp/code_bin to avoid collision with the /tmp/code source dir.
+		compileArgs := make([]string, len(lang.Compile))
+		for i, a := range lang.Compile {
+			a = strings.ReplaceAll(a, "/tmp/code.cpp", absMain)
+			a = strings.ReplaceAll(a, "/tmp/Main.java", absMain)
+			// Redirect g++ output binary away from the source directory
+			a = strings.ReplaceAll(a, "-o /tmp/code", "-o /tmp/code_bin")
+			compileArgs[i] = a
+		}
+		compileCmd := strings.Join(compileArgs, " ")
+		// Also fix the run command if it refers to the old binary path
+		runArgs := make([]string, len(lang.Run))
+		for i, a := range lang.Run {
+			a = strings.ReplaceAll(a, "/tmp/code", "/tmp/code_bin")
+			runArgs[i] = a
+		}
+		runCmd := strings.Join(runArgs, " ")
+		scriptParts = append(scriptParts, fmt.Sprintf("cd /tmp/code && %s && %s", compileCmd, runCmd))
+	} else {
+		// Interpreted language — use lang.Name to pick the right interpreter
+		var runCmd string
+		switch lang.Name {
+		case "python":
+			runCmd = fmt.Sprintf("python3 %s", absMain)
+		case "javascript":
+			runCmd = fmt.Sprintf("node %s", absMain)
+		default:
+			// Generic fallback: substitute known placeholders then use as-is
+			cmd := strings.Join(lang.Run, " ")
+			cmd = strings.ReplaceAll(cmd, "/tmp/code.py", absMain)
+			cmd = strings.ReplaceAll(cmd, "/tmp/code.js", absMain)
+			runCmd = cmd
+		}
+		scriptParts = append(scriptParts, fmt.Sprintf("cd /tmp/code && %s", runCmd))
+	}
+
+	script := strings.Join(scriptParts, "\n")
 	args := append(dockerArgs, "sh", "-c", script)
 
 	return s.runDockerCommand(args, time.Duration(lang.Timeout)*time.Second)

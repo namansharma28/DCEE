@@ -12,7 +12,6 @@ import ProjectEditor from './components/ProjectEditor';
 import ShareView from './components/ShareView';
 import LoadingSpinner from './components/LoadingSpinner';
 import { executeCode, getResult } from './services/api';
-import './App.css';
 
 const SAMPLE_CODE = {
   python: `# Welcome to CodeRunner!

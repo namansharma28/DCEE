@@ -1,11 +1,10 @@
 import React from 'react';
-import './LanguageSelector.css';
 
 const LANGUAGES = [
-  { value: 'python', label: '🐍 Python' },
-  { value: 'cpp', label: '⚡ C++' },
-  { value: 'javascript', label: '🟨 JavaScript' },
-  { value: 'java', label: '☕ Java' }
+  { value: 'python', label: 'Python' },
+  { value: 'cpp', label: 'C++' },
+  { value: 'javascript', label: 'JavaScript' },
+  { value: 'java', label: 'Java' }
 ];
 
 const LanguageSelector = ({ language, onLanguageChange }) => {

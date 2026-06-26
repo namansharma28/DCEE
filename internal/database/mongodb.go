@@ -3,6 +3,7 @@ package database
 import (
 	"context"
 	"crypto/tls"
+	"fmt"
 	"log"
 	"os"
 	"time"
@@ -20,7 +21,7 @@ var (
 func ConnectMongoDB() error {
 	mongoURI := os.Getenv("MONGODB_URI")
 	if mongoURI == "" {
-		log.Fatal("MONGODB_URI environment variable is not set")
+		return fmt.Errorf("MONGODB_URI environment variable is not set")
 	}
 
 	// Set client options

@@ -17,7 +17,6 @@ import {
   Folder,
   FolderPlus
 } from 'lucide-react';
-import './ProjectEditor.css';
 
 const ProjectEditor = () => {
   const { projectId } = useParams();
@@ -28,6 +27,7 @@ const ProjectEditor = () => {
   const [loading, setLoading] = useState(true);
   const [selectedFile, setSelectedFile] = useState(null);
   const [selectedFolder, setSelectedFolder] = useState(null);
+  const [prevSelectedFileId, setPrevSelectedFileId] = useState(null);
   const [code, setCode] = useState('');
   const [output, setOutput] = useState('');
   const [isRunning, setIsRunning] = useState(false);
@@ -37,6 +37,45 @@ const ProjectEditor = () => {
   const [showNewFolderModal, setShowNewFolderModal] = useState(false);
   const [newFileName, setNewFileName] = useState('');
   const [newFolderName, setNewFolderName] = useState('');
+  const [contextMenu, setContextMenu] = useState(null);
+  const [expandedFolders, setExpandedFolders] = useState(new Set());
+  
+  // Load unsaved changes from localStorage on mount
+  const getUnsavedChanges = () => {
+    try {
+      const saved = localStorage.getItem(`project_${projectId}_unsaved`);
+      return saved ? JSON.parse(saved) : {};
+    } catch (e) {
+      return {};
+    }
+  };
+  
+  const saveUnsavedChanges = (fileId, content) => {
+    try {
+      const unsaved = getUnsavedChanges();
+      unsaved[fileId] = content;
+      localStorage.setItem(`project_${projectId}_unsaved`, JSON.stringify(unsaved));
+    } catch (e) {
+      console.error('Failed to save to localStorage:', e);
+    }
+  };
+  
+  const clearUnsavedChanges = (fileId) => {
+    try {
+      const unsaved = getUnsavedChanges();
+      delete unsaved[fileId];
+      localStorage.setItem(`project_${projectId}_unsaved`, JSON.stringify(unsaved));
+    } catch (e) {
+      console.error('Failed to clear localStorage:', e);
+    }
+  };
+
+  useEffect(() => {
+    // Close context menu when clicking anywhere
+    const handleClick = () => setContextMenu(null);
+    document.addEventListener('click', handleClick);
+    return () => document.removeEventListener('click', handleClick);
+  }, []);
 
   useEffect(() => {
     // Don't redirect if still loading auth status
@@ -51,13 +90,31 @@ const ProjectEditor = () => {
   }, [projectId, isAuthenticated, authLoading, navigate]);
 
   useEffect(() => {
-    if (selectedFile) {
-      setCode(selectedFile.content);
+    if (selectedFile && selectedFile.id !== prevSelectedFileId) {
+      // Load content for the new file (check localStorage first)
+      const unsaved = getUnsavedChanges();
+      const fileContent = unsaved[selectedFile.id] !== undefined 
+        ? unsaved[selectedFile.id] 
+        : selectedFile.content;
+      
+      setCode(fileContent);
       setOutput('');
       setStatus('ready');
       setExecutionTime(null);
+      setPrevSelectedFileId(selectedFile.id);
     }
-  }, [selectedFile]);
+  }, [selectedFile, prevSelectedFileId, projectId]);
+
+  // Auto-save code changes to localStorage
+  useEffect(() => {
+    if (selectedFile && code !== undefined) {
+      const timeoutId = setTimeout(() => {
+        saveUnsavedChanges(selectedFile.id, code);
+      }, 500); // Debounce for 500ms
+      
+      return () => clearTimeout(timeoutId);
+    }
+  }, [code, selectedFile, projectId]);
 
   const fetchProject = async () => {
     try {
@@ -103,8 +160,43 @@ const ProjectEditor = () => {
         ...getAuthHeaders()
       };
 
-      const response = await executeCode(code, project.language, headers);
-      const jobId = response.job_id;
+      // Get all files with current unsaved changes
+      const unsaved = getUnsavedChanges();
+      const allFiles = project.files
+        .filter(f => f.name !== '.folder' && f.name !== '.gitkeep')
+        .map(file => ({
+          ...file,
+          content: file.id === selectedFile.id 
+            ? code 
+            : (unsaved[file.id] !== undefined ? unsaved[file.id] : file.content)
+        }));
+
+      // Prepare multi-file execution request
+      const executionRequest = {
+        language: selectedFile ? getFileLanguage(selectedFile.name) : project.language,
+        files: allFiles,
+        main_file: selectedFile?.path || project.files[0]?.path
+      };
+
+      console.log('Execution request:', executionRequest);
+
+      const response = await fetch('/execute', {
+        method: 'POST',
+        headers,
+        body: JSON.stringify(executionRequest)
+      });
+
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(errorData.error || errorData.details || 'Execution failed');
+      }
+
+      const data = await response.json();
+      const jobId = data.job_id;
+
+      if (!jobId) {
+        throw new Error('No job ID returned from server');
+      }
 
       let attempts = 0;
       const maxAttempts = 30;
@@ -168,12 +260,6 @@ const ProjectEditor = () => {
           : file
       );
 
-      const updatedProject = {
-        ...project,
-        files: updatedFiles,
-        updated_at: new Date().toISOString()
-      };
-
       const response = await fetch(`/api/project/${projectId}`, {
         method: 'PUT',
         headers: {
@@ -192,15 +278,21 @@ const ProjectEditor = () => {
       const data = await response.json();
       
       if (data.success) {
-        setProject(updatedProject);
-        setSelectedFile({ ...selectedFile, content: code });
-        // Show success feedback
+        // Update local project state
+        setProject({ ...project, files: updatedFiles });
+        // Update selected file reference
+        const updatedFile = updatedFiles.find(f => f.id === selectedFile.id);
+        setSelectedFile(updatedFile);
+        // Clear unsaved changes for this file from localStorage
+        clearUnsavedChanges(selectedFile.id);
         console.log('File saved successfully');
       } else {
         console.error('Failed to save file:', data.error);
+        alert('Failed to save file: ' + data.error);
       }
     } catch (error) {
       console.error('Failed to save file:', error);
+      alert('Failed to save file');
     }
   };
 
@@ -270,9 +362,9 @@ const ProjectEditor = () => {
     // Create a placeholder file to represent the folder
     const folderFile = {
       id: `folder_${Date.now()}`,
-      name: '.folder',
-      path: `${folderPath}/.folder`,
-      content: '',
+      name: '.gitkeep',
+      path: `${folderPath}/.gitkeep`,
+      content: '# This file keeps the folder in version control',
       language: 'plaintext',
       size: 0,
       created_at: new Date().toISOString(),
@@ -301,13 +393,24 @@ const ProjectEditor = () => {
       
       if (data.success) {
         setProject({ ...project, files: updatedFiles });
+        // Expand the parent folder and the new folder
+        setExpandedFolders(prev => {
+          const newSet = new Set(prev);
+          if (selectedFolder) {
+            newSet.add(selectedFolder);
+          }
+          newSet.add(folderPath);
+          return newSet;
+        });
         setShowNewFolderModal(false);
         setNewFolderName('');
       } else {
         console.error('Failed to create folder:', data.error);
+        alert('Failed to create folder: ' + data.error);
       }
     } catch (error) {
       console.error('Failed to create folder:', error);
+      alert('Failed to create folder');
     }
   };
 
@@ -349,6 +452,128 @@ const ProjectEditor = () => {
     }
   };
 
+  const handleContextMenu = (e, item, type) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setContextMenu({
+      x: e.clientX,
+      y: e.clientY,
+      item,
+      type // 'file' or 'folder'
+    });
+  };
+
+  const handleCreateFileInFolder = () => {
+    setSelectedFolder(contextMenu.item);
+    setShowNewFileModal(true);
+    setContextMenu(null);
+  };
+
+  const handleCreateFolderInFolder = () => {
+    setSelectedFolder(contextMenu.item);
+    setShowNewFolderModal(true);
+    setContextMenu(null);
+  };
+
+  const handleRenameItem = () => {
+    const newName = prompt(`Enter new name for ${contextMenu.item.name || contextMenu.item}:`);
+    if (!newName || !newName.trim()) return;
+
+    if (contextMenu.type === 'file') {
+      const file = contextMenu.item;
+      const pathParts = file.path.split('/');
+      pathParts[pathParts.length - 1] = newName;
+      const newPath = pathParts.join('/');
+
+      const updatedFiles = project.files.map(f =>
+        f.id === file.id
+          ? { ...f, name: newName, path: newPath, updated_at: new Date().toISOString() }
+          : f
+      );
+
+      updateProjectFiles(updatedFiles);
+    } else if (contextMenu.type === 'folder') {
+      const oldFolderPath = contextMenu.item;
+      const pathParts = oldFolderPath.split('/');
+      pathParts[pathParts.length - 1] = newName;
+      const newFolderPath = pathParts.join('/');
+
+      const updatedFiles = project.files.map(f => {
+        if (f.path.startsWith(oldFolderPath + '/')) {
+          const newPath = f.path.replace(oldFolderPath, newFolderPath);
+          return { ...f, path: newPath, updated_at: new Date().toISOString() };
+        }
+        return f;
+      });
+
+      updateProjectFiles(updatedFiles);
+    }
+    setContextMenu(null);
+  };
+
+  const handleDeleteItem = async () => {
+    const confirmDelete = window.confirm(
+      `Are you sure you want to delete ${contextMenu.item.name || contextMenu.item}?`
+    );
+    if (!confirmDelete) return;
+
+    if (contextMenu.type === 'file') {
+      const file = contextMenu.item;
+      const updatedFiles = project.files.filter(f => f.id !== file.id);
+      
+      // If deleting the selected file, select another file
+      if (selectedFile?.id === file.id) {
+        setSelectedFile(updatedFiles[0] || null);
+        setCode(updatedFiles[0]?.content || '');
+      }
+
+      await updateProjectFiles(updatedFiles);
+    } else if (contextMenu.type === 'folder') {
+      const folderPath = contextMenu.item;
+      const updatedFiles = project.files.filter(f => !f.path.startsWith(folderPath + '/'));
+      
+      // If deleting a folder containing the selected file, select another file
+      if (selectedFile && selectedFile.path.startsWith(folderPath + '/')) {
+        setSelectedFile(updatedFiles[0] || null);
+        setCode(updatedFiles[0]?.content || '');
+      }
+
+      await updateProjectFiles(updatedFiles);
+    }
+    setContextMenu(null);
+  };
+
+  const updateProjectFiles = async (updatedFiles) => {
+    try {
+      const response = await fetch(`/api/project/${projectId}`, {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+          ...getAuthHeaders()
+        },
+        body: JSON.stringify({
+          name: project.name,
+          description: project.description,
+          is_public: project.is_public,
+          tags: project.tags,
+          files: updatedFiles
+        })
+      });
+
+      const data = await response.json();
+      
+      if (data.success) {
+        setProject({ ...project, files: updatedFiles });
+      } else {
+        console.error('Failed to update project:', data.error);
+        alert('Failed to update project: ' + data.error);
+      }
+    } catch (error) {
+      console.error('Failed to update project:', error);
+      alert('Failed to update project');
+    }
+  };
+
   const getFileLanguage = (fileName) => {
     const ext = fileName.split('.').pop().toLowerCase();
     switch (ext) {
@@ -364,12 +589,12 @@ const ProjectEditor = () => {
   const getFileIcon = (fileName) => {
     const ext = fileName.split('.').pop().toLowerCase();
     switch (ext) {
-      case 'py': return '🐍';
-      case 'js': return '🟨';
-      case 'cpp': case 'cc': case 'cxx': case 'h': case 'hpp': return '⚡';
-      case 'java': return '☕';
-      case 'md': return '📝';
-      case 'txt': return '📄';
+      case 'py': return 'PY';
+      case 'js': return 'JS';
+      case 'cpp': case 'cc': case 'cxx': case 'h': case 'hpp': return 'C++';
+      case 'java': return 'JV';
+      case 'md': return 'MD';
+      case 'txt': return 'TXT';
       default: return <FileText size={16} />;
     }
   };
@@ -409,6 +634,162 @@ const ProjectEditor = () => {
       }
     });
     return Array.from(folders).sort();
+  };
+
+  const toggleFolder = (folderPath) => {
+    setExpandedFolders(prev => {
+      const newSet = new Set(prev);
+      if (newSet.has(folderPath)) {
+        newSet.delete(folderPath);
+      } else {
+        newSet.add(folderPath);
+      }
+      return newSet;
+    });
+  };
+
+  const buildFileTree = () => {
+    const tree = {
+      name: 'root',
+      path: '',
+      type: 'folder',
+      children: []
+    };
+
+    const filesByPath = {};
+    
+    // First pass: create all folders and files
+    project.files.forEach(file => {
+      if (file.name === '.folder' || file.name === '.gitkeep') {
+        // Don't show placeholder files, but use them to create folder structure
+        const parts = file.path.split('/');
+        let currentPath = '';
+        
+        // Create folder structure up to the placeholder file
+        for (let i = 0; i < parts.length - 1; i++) {
+          const folderName = parts[i];
+          currentPath = currentPath ? `${currentPath}/${folderName}` : folderName;
+          
+          if (!filesByPath[currentPath]) {
+            filesByPath[currentPath] = {
+              name: folderName,
+              path: currentPath,
+              type: 'folder',
+              children: []
+            };
+          }
+        }
+        return; // Skip adding the placeholder file itself
+      }
+      
+      const parts = file.path.split('/');
+      let currentPath = '';
+      
+      // Create folder structure
+      for (let i = 0; i < parts.length - 1; i++) {
+        const folderName = parts[i];
+        currentPath = currentPath ? `${currentPath}/${folderName}` : folderName;
+        
+        if (!filesByPath[currentPath]) {
+          filesByPath[currentPath] = {
+            name: folderName,
+            path: currentPath,
+            type: 'folder',
+            children: []
+          };
+        }
+      }
+      
+      // Add the file
+      filesByPath[file.path] = {
+        ...file,
+        type: 'file'
+      };
+    });
+
+    // Second pass: build tree structure
+    Object.values(filesByPath).forEach(item => {
+      const parts = item.path.split('/');
+      
+      if (parts.length === 1) {
+        // Root level item
+        tree.children.push(item);
+      } else {
+        // Nested item - find parent
+        const parentPath = parts.slice(0, -1).join('/');
+        const parent = filesByPath[parentPath];
+        if (parent && parent.children) {
+          parent.children.push(item);
+        }
+      }
+    });
+
+    // Sort children: folders first, then files
+    const sortChildren = (node) => {
+      if (node.children) {
+        node.children.sort((a, b) => {
+          if (a.type === 'folder' && b.type === 'file') return -1;
+          if (a.type === 'file' && b.type === 'folder') return 1;
+          return a.name.localeCompare(b.name);
+        });
+        node.children.forEach(sortChildren);
+      }
+    };
+    sortChildren(tree);
+
+    return tree.children;
+  };
+
+  const renderFileTree = (items, depth = 0) => {
+    return items.map(item => {
+      if (item.type === 'folder') {
+        const isExpanded = expandedFolders.has(item.path);
+        return (
+          <div key={item.path} className="tree-item">
+            <div
+              className={`file-item folder-item ${selectedFolder === item.path ? 'selected' : ''}`}
+              style={{ paddingLeft: `${depth * 0.75 + 0.75}rem` }}
+              onClick={(e) => {
+                e.stopPropagation();
+                toggleFolder(item.path);
+                setSelectedFolder(item.path);
+              }}
+              onContextMenu={(e) => handleContextMenu(e, item.path, 'folder')}
+            >
+              <span className="expand-icon">
+                {isExpanded ? '▾' : '▸'}
+              </span>
+              <span className="folder-icon">
+                {isExpanded ? '[−]' : '[+]'}
+              </span>
+              <span className="file-name">{item.name}</span>
+              <span className="item-count">({item.children?.length || 0})</span>
+            </div>
+            {isExpanded && item.children && item.children.length > 0 && (
+              <div className="folder-children">
+                {renderFileTree(item.children, depth + 1)}
+              </div>
+            )}
+          </div>
+        );
+      } else {
+        return (
+          <div
+            key={item.id}
+            className={`file-item file-item-leaf ${selectedFile?.id === item.id ? 'active' : ''}`}
+            style={{ paddingLeft: `${depth * 0.75 + 2}rem` }}
+            onClick={() => setSelectedFile(item)}
+            onContextMenu={(e) => handleContextMenu(e, item, 'file')}
+          >
+            <span className="file-icon">{getFileIcon(item.name)}</span>
+            <span className="file-name">{item.name}</span>
+            {item.id === project.main_file && (
+              <span className="main-badge">main</span>
+            )}
+          </div>
+        );
+      }
+    });
   };
 
   if (loading) {
@@ -491,7 +872,7 @@ const ProjectEditor = () => {
               >
                 {isRunning ? (
                   <>
-                    <span className="loading">⟳</span>
+                    <span className="loading">○</span>
                     Running...
                   </>
                 ) : (
@@ -507,8 +888,8 @@ const ProjectEditor = () => {
           {/* Editor Layout */}
           <div className="editor-layout">
             {/* File Sidebar */}
-            <div className="file-sidebar">
-              <div className="sidebar-header">
+            <div className="file-sidebar" onClick={() => setSelectedFolder(null)}>
+              <div className="sidebar-header" onClick={(e) => e.stopPropagation()}>
                 <h3>Files</h3>
                 <div className="sidebar-actions">
                   <button 
@@ -527,40 +908,8 @@ const ProjectEditor = () => {
                   </button>
                 </div>
               </div>
-              <div className="file-list">
-                {/* Show folders first */}
-                {getFolders().map((folder) => (
-                  <div 
-                    key={folder}
-                    className={`file-item folder-item ${selectedFolder === folder ? 'selected' : ''}`}
-                    onClick={() => setSelectedFolder(selectedFolder === folder ? null : folder)}
-                  >
-                    <Folder size={16} />
-                    <span className="file-name">{folder.split('/').pop()}</span>
-                  </div>
-                ))}
-                
-                {/* Show files organized by folder */}
-                {Object.entries(organizeFiles()).map(([folder, files]) => (
-                  <div key={folder} className={folder === '_root' ? '' : 'folder-contents'}>
-                    {folder !== '_root' && selectedFolder === folder && (
-                      <div className="folder-label">{folder}/</div>
-                    )}
-                    {(folder === '_root' || selectedFolder === folder) && files.map((file) => (
-                      <div 
-                        key={file.id}
-                        className={`file-item ${selectedFile?.id === file.id ? 'active' : ''} ${folder !== '_root' ? 'nested' : ''}`}
-                        onClick={() => setSelectedFile(file)}
-                      >
-                        <span className="file-icon">{getFileIcon(file.name)}</span>
-                        <span className="file-name">{file.name}</span>
-                        {file.id === project.main_file && (
-                          <span className="main-badge">main</span>
-                        )}
-                      </div>
-                    ))}
-                  </div>
-                ))}
+              <div className="file-list" onClick={(e) => e.stopPropagation()}>
+                {renderFileTree(buildFileTree())}
               </div>
             </div>
 
@@ -627,6 +976,12 @@ const ProjectEditor = () => {
                   <span>Creating in: {selectedFolder}/</span>
                 </div>
               )}
+              {!selectedFolder && (
+                <div className="folder-context" style={{ background: '#1a1a1a', color: '#a3a3a3' }}>
+                  <Folder size={14} />
+                  <span>Creating in: / (root directory)</span>
+                </div>
+              )}
               <div className="form-group">
                 <label>File Name</label>
                 <input
@@ -679,6 +1034,12 @@ const ProjectEditor = () => {
                   <span>Creating in: {selectedFolder}/</span>
                 </div>
               )}
+              {!selectedFolder && (
+                <div className="folder-context" style={{ background: '#1a1a1a', color: '#a3a3a3' }}>
+                  <Folder size={14} />
+                  <span>Creating in: / (root directory)</span>
+                </div>
+              )}
               <div className="form-group">
                 <label>Folder Name</label>
                 <input
@@ -706,6 +1067,42 @@ const ProjectEditor = () => {
                 Create Folder
               </button>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* Context Menu */}
+      {contextMenu && (
+        <div 
+          className="context-menu"
+          style={{
+            position: 'fixed',
+            top: contextMenu.y,
+            left: contextMenu.x,
+            zIndex: 1000
+          }}
+          onClick={(e) => e.stopPropagation()}
+        >
+          {contextMenu.type === 'folder' && (
+            <>
+              <div className="context-menu-item" onClick={handleCreateFileInFolder}>
+                <Plus size={14} />
+                <span>New File</span>
+              </div>
+              <div className="context-menu-item" onClick={handleCreateFolderInFolder}>
+                <FolderPlus size={14} />
+                <span>New Folder</span>
+              </div>
+              <div className="context-menu-divider"></div>
+            </>
+          )}
+          <div className="context-menu-item" onClick={handleRenameItem}>
+            <FileText size={14} />
+            <span>Rename</span>
+          </div>
+          <div className="context-menu-item context-menu-item-danger" onClick={handleDeleteItem}>
+            <Trash2 size={14} />
+            <span>Delete</span>
           </div>
         </div>
       )}

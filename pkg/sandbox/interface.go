@@ -7,7 +7,7 @@ type Sandbox interface {
 	ExecuteCode(req *models.ExecutionRequest, lang models.Language) (*models.ExecutionResult, error)
 }
 
-// NewSandbox creates a SimpleSandbox (CLI-based Docker execution)
+// NewSandbox creates a sandbox — tries Docker first, falls back to local execution
 func NewSandbox() (Sandbox, error) {
-	return NewSimpleSandbox()
+	return NewSandboxWithFallback()
 }

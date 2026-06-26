@@ -1,5 +1,4 @@
 import React, { useState } from 'react';
-import './ShareButton.css';
 
 const ShareButton = ({ code, language, onShare }) => {
   const [isSharing, setIsSharing] = useState(false);

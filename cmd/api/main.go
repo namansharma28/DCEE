@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"io"
 	"log"
 	"net/http"
 	"os"
@@ -180,16 +181,45 @@ func (s *APIServer) getSupportedLanguages(c *gin.Context) {
 }
 
 func (s *APIServer) executeCode(c *gin.Context) {
+	// Use a more flexible struct that matches what frontend sends
 	var req struct {
-		Code     string `json:"code" binding:"required"`
-		Language string `json:"language" binding:"required"`
+		Code     string `json:"code,omitempty"`
+		Language string `json:"language"`
 		UserID   string `json:"user_id,omitempty"`
+		Files    []struct {
+			ID        string `json:"id"`
+			Name      string `json:"name"`
+			Path      string `json:"path"`
+			Content   string `json:"content"`
+			Language  string `json:"language"`
+			Size      int64  `json:"size"`
+			CreatedAt string `json:"created_at"`
+			UpdatedAt string `json:"updated_at"`
+		} `json:"files,omitempty"`
+		MainFile string `json:"main_file,omitempty"`
 	}
 
 	if err := c.ShouldBindJSON(&req); err != nil {
+		log.Printf("Failed to bind JSON: %v", err)
 		c.JSON(http.StatusBadRequest, gin.H{
 			"error":   "Invalid request format",
 			"details": err.Error(),
+		})
+		return
+	}
+
+	// Validate that we have either code or files
+	if req.Code == "" && len(req.Files) == 0 {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error": "Either 'code' or 'files' must be provided",
+		})
+		return
+	}
+
+	// Validate language
+	if req.Language == "" {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error": "Language is required",
 		})
 		return
 	}
@@ -208,15 +238,33 @@ func (s *APIServer) executeCode(c *gin.Context) {
 		return
 	}
 
+	// Convert files to ProjectFile format
+	var projectFiles []models.ProjectFile
+	for _, f := range req.Files {
+		projectFiles = append(projectFiles, models.ProjectFile{
+			ID:       f.ID,
+			Name:     f.Name,
+			Path:     f.Path,
+			Content:  f.Content,
+			Language: f.Language,
+			Size:     f.Size,
+		})
+	}
+
 	// Create execution job
 	job := &models.ExecutionRequest{
 		ID:       uuid.New().String(),
 		Code:     req.Code,
 		Language: req.Language,
 		UserID:   req.UserID,
+		Files:    projectFiles,
+		MainFile: req.MainFile,
 		Status:   "pending",
 		Created:  time.Now(),
 	}
+
+	log.Printf("Execution job created: ID=%s, Language=%s, Files=%d, MainFile=%s",
+		job.ID, job.Language, len(job.Files), job.MainFile)
 
 	// Push to queue
 	if err := s.queue.Push(job); err != nil {
@@ -330,14 +378,36 @@ func getEnv(key, defaultValue string) string {
 }
 
 func loadEnvFile() error {
-	// Simple .env file loader
 	file, err := os.Open(".env.local")
 	if err != nil {
 		return err
 	}
 	defer file.Close()
 
-	// Read file content and set environment variables
-	// This is a simple implementation - in production, use a proper .env library
+	content, err := io.ReadAll(file)
+	if err != nil {
+		return err
+	}
+
+	lines := strings.Split(string(content), "\n")
+	for _, line := range lines {
+		// Trim carriage returns (Windows line endings)
+		line = strings.TrimRight(line, "\r")
+		// Skip blank lines and comments
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		// Split on first "=" only
+		parts := strings.SplitN(line, "=", 2)
+		if len(parts) != 2 {
+			continue
+		}
+		key := strings.TrimSpace(parts[0])
+		value := strings.TrimSpace(parts[1])
+		// Only set if not already set by the real environment
+		if os.Getenv(key) == "" {
+			os.Setenv(key, value)
+		}
+	}
 	return nil
 }

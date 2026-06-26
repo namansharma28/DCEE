@@ -14,7 +14,6 @@ import {
   FileText,
   FolderOpen
 } from 'lucide-react';
-import './ShareView.css';
 
 const ShareView = () => {
   const { shareId } = useParams();

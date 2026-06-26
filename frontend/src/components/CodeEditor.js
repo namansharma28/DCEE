@@ -1,7 +1,6 @@
 import React, { useEffect } from 'react';
 import Editor from '@monaco-editor/react';
 import ShareButton from './ShareButton';
-import './CodeEditor.css';
 
 const CodeEditor = ({ language, code, onChange, onShare }) => {
   const getMonacoLanguage = (lang) => {

@@ -1,13 +1,12 @@
 import React from 'react';
-import './OutputPanel.css';
 
 const OutputPanel = ({ output, status, executionTime, isRunning }) => {
   const getStatusIcon = () => {
     switch (status) {
-      case 'success': return '✅';
-      case 'error': return '❌';
-      case 'running': return '⟳';
-      default: return '⚪';
+      case 'success': return '✓';
+      case 'error': return '✕';
+      case 'running': return '○';
+      default: return '○';
     }
   };
 
@@ -55,7 +54,7 @@ const OutputPanel = ({ output, status, executionTime, isRunning }) => {
           <pre className="output-text">{output}</pre>
         ) : (
           <div className="output-placeholder">
-            <div className="placeholder-icon">▶</div>
+            <div className="placeholder-icon">▸</div>
             <div className="placeholder-text">
               Click "Run Code" to see the output
             </div>

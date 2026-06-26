@@ -1,94 +1,68 @@
 import React from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
-import { Code, FolderOpen, LogOut, User, Play } from 'lucide-react';
-import './Header.css';
 
 const Header = () => {
   const navigate = useNavigate();
   const { user, isAuthenticated, logout } = useAuth();
-
-  const handleLogin = () => {
-    navigate('/login');
-  };
 
   const handleLogout = async () => {
     await logout();
     navigate('/');
   };
 
-  const handleHome = () => {
-    navigate('/');
-  };
-
   return (
-    <header className="header">
-      <div className="container">
-        <div className="header-content">
-          <div className="logo" onClick={handleHome} style={{ cursor: 'pointer' }}>
-            <div className="logo-icon">
-              <Play className="icon-play" size={24} />
-            </div>
-            <div className="logo-text">
-              <span className="brand-name">CodeRunner</span>
-              <span className="brand-tagline">Execute code instantly</span>
-            </div>
+    <header>
+      <div className="header-content">
+        {/* Logo */}
+        <button className="logo" onClick={() => navigate('/')}>
+          <div className="logo-icon">⚡</div>
+          <div className="logo-text">
+            <span className="brand-name">CodeRunner</span>
+            <span className="brand-tagline">Execute instantly</span>
           </div>
-          
-          <nav className="nav-links">
-            <button 
-              className="nav-link"
-              onClick={() => navigate('/editor')}
-            >
-              <Code size={18} />
-              Editor
-            </button>
-            
-            {isAuthenticated && (
-              <button 
-                className="nav-link"
-                onClick={() => navigate('/projects')}
-              >
-                <FolderOpen size={18} />
-                Projects
-              </button>
-            )}
-          </nav>
-          
-          <div className="header-right">
-            <div className="header-stats">
-              <div className="stat-item">
-                <span className="stat-number">4</span>
-                <span className="stat-label">Languages</span>
-              </div>
-              <div className="stat-item">
-                <span className="stat-number">&lt;2s</span>
-                <span className="stat-label">Avg Time</span>
-              </div>
-            </div>
+        </button>
 
-            <div className="auth-section">
-              {isAuthenticated && user ? (
-                <div className="user-menu">
-                  <div className="user-info">
-                    <User size={20} className="user-icon" />
-                    <div className="user-details">
-                      <span className="user-name">{user.name}</span>
-                      <span className="user-email">{user.email}</span>
-                    </div>
-                  </div>
-                  <button className="logout-btn" onClick={handleLogout}>
-                    <LogOut size={16} />
-                    Logout
-                  </button>
+        {/* Nav */}
+        <nav className="nav-links">
+          <button className="nav-link" onClick={() => navigate('/editor')}>
+            Editor
+          </button>
+          {isAuthenticated && (
+            <button className="nav-link" onClick={() => navigate('/projects')}>
+              Projects
+            </button>
+          )}
+        </nav>
+
+        {/* Auth */}
+        <div className="user-menu">
+          {isAuthenticated && user ? (
+            <>
+              <div className="user-info" style={{ display: 'none' }}>
+                <div className="logo-icon" style={{ width: 24, height: 24, fontSize: '0.75rem' }}>
+                  {user.name?.[0]?.toUpperCase() || 'U'}
                 </div>
-              ) : (
-                <button className="login-btn" onClick={handleLogin}>
-                  Sign In
-                </button>
-              )}
-            </div>
-          </div>
+                <span className="user-name">{user.name}</span>
+              </div>
+              <span className="nav-link" style={{ color: '#666', fontSize: '0.8125rem' }}>
+                {user.email}
+              </span>
+              <button
+                className="btn btn-secondary btn-small"
+                onClick={handleLogout}
+              >
+                Logout
+              </button>
+            </>
+          ) : (
+            <button
+              className="btn btn-primary btn-small"
+              onClick={() => navigate('/login')}
+            >
+              Sign In
+            </button>
+          )}
         </div>
       </div>
     </header>

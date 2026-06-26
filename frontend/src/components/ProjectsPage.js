@@ -3,7 +3,6 @@ import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import Header from './Header';
 import LoadingSpinner from './LoadingSpinner';
-import './ProjectsPage.css';
 
 const ProjectsPage = () => {
   const navigate = useNavigate();
@@ -165,11 +164,11 @@ const ProjectsPage = () => {
 
   const getLanguageIcon = (language) => {
     switch (language) {
-      case 'python': return '🐍';
-      case 'javascript': return '🟨';
-      case 'cpp': return '⚡';
-      case 'java': return '☕';
-      default: return '📄';
+      case 'python': return 'PY';
+      case 'javascript': return 'JS';
+      case 'cpp': return 'C++';
+      case 'java': return 'JV';
+      default: return 'FL';
     }
   };
 
@@ -216,7 +215,7 @@ const ProjectsPage = () => {
           {/* Projects Grid */}
           {projects.length === 0 ? (
             <div className="empty-state">
-              <div className="empty-icon">📁</div>
+              <div className="empty-icon">[ ]</div>
               <h2>No projects yet</h2>
               <p>Create your first project to get started with coding!</p>
               <div className="empty-actions">
@@ -272,14 +271,14 @@ const ProjectsPage = () => {
                   
                   <div className="project-meta">
                     <span className="meta-item">
-                      📄 {project.files?.length || 0} files
+                      {project.files?.length || 0} files
                     </span>
                     <span className="meta-item">
-                      🕒 {formatDate(project.updated_at)}
+                      {formatDate(project.updated_at)}
                     </span>
                     {project.is_public && (
                       <span className="meta-item public-badge">
-                        🌐 Public
+                        Public
                       </span>
                     )}
                   </div>
@@ -411,7 +410,7 @@ const ProjectsPage = () => {
                     </div>
                     <p className="template-description">{template.description}</p>
                     <div className="template-files">
-                      📄 {template.files.length} files
+                      {template.files.length} files
                     </div>
                   </div>
                 ))}
